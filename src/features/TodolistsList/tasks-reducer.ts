@@ -4,10 +4,16 @@ import {
     RemoveTodolistActionType,
     SetTodolistsActionType
 } from './todolists-reducer'
-import {TaskPriorities, TaskStatuses, TaskType, todolistsAPI, UpdateTaskModelType} from '../../api/todolists-api'
+import {
+    TaskPriorities,
+    TaskStatuses,
+    TaskType,
+    todolistsAPI,
+    UpdateTaskModelType
+} from '../../api/todolists-api'
 import {Dispatch} from 'redux'
 import {AppRootStateType} from '../../app/store'
-import {setAppStatusAC, setAppStatusACType, setError, setErrorType} from "../../app/app-reducer";
+import {RequestStatusType, setAppStatusAC, setAppStatusACType, setErrorType} from "../../app/app-reducer";
 import axios, {AxiosError} from "axios";
 import {handleServerAppError, handleServerNetworkError} from "../../utils/error-utils";
 
@@ -39,7 +45,9 @@ export const tasksReducer = (state: TasksStateType = initialState, action: Actio
             return copyState
         }
         case 'SET-TASKS':
-            return {...state, [action.todolistId]: action.tasks}
+            return {...state, [action.todolistId]: action.tasks.map((el) => ({...el, entityStatus: 'idle'}) )}
+        case "CHANGE-TASK-ENTITY-STATUS":
+            return {...state, [action.todolistId]: state[action.todolistId].map(t => t.id === action.taskId ? {...t, entityStatus: action.status}: t)}
         default:
             return state
     }
@@ -54,6 +62,7 @@ export const updateTaskAC = (taskId: string, model: UpdateDomainTaskModelType, t
     ({type: 'UPDATE-TASK', model, todolistId, taskId} as const)
 export const setTasksAC = (tasks: Array<TaskType>, todolistId: string) =>
     ({type: 'SET-TASKS', tasks, todolistId} as const)
+export const changeTaskEntityStatusAC = (todolistId: string, taskId: string, status: RequestStatusType) => ({type: 'CHANGE-TASK-ENTITY-STATUS',todolistId, taskId, status} as const)
 
 // thunks
 export const fetchTasksTC = (todolistId: string) => (dispatch: Dispatch<ActionsType>) => {
@@ -64,16 +73,23 @@ export const fetchTasksTC = (todolistId: string) => (dispatch: Dispatch<ActionsT
             const action = setTasksAC(tasks, todolistId)
             dispatch(action)
             dispatch(setAppStatusAC('succeeded'))
-        })
+        }).catch ((error: AxiosError)=>{
+        handleServerNetworkError(error, dispatch)
+        dispatch(changeTodolistEntityStatusAC(todolistId,'idle'))
+    })
 }
 export const removeTaskTC = (taskId: string, todolistId: string) => async (dispatch: Dispatch<ActionsType>) => {
     dispatch(setAppStatusAC('loading'))
+    dispatch(changeTaskEntityStatusAC(todolistId, taskId, 'loading'))
+    dispatch(changeTodolistEntityStatusAC(todolistId, 'loading'))
     try {
         const res = await todolistsAPI.deleteTask(todolistId, taskId)
         if (res.data.resultCode === 0) {
             const action = removeTaskAC(taskId, todolistId)
             dispatch(action)
             dispatch(setAppStatusAC('succeeded'))
+            dispatch(changeTaskEntityStatusAC(todolistId, taskId, 'succeeded'))
+            dispatch(changeTodolistEntityStatusAC(todolistId, 'succeeded'))
         } else {
             handleServerAppError(res.data, dispatch)
         }
@@ -137,11 +153,13 @@ export const updateTaskTC = (taskId: string, domainModel: UpdateDomainTaskModelT
             ...domainModel
         }
         dispatch(setAppStatusAC('loading'))
+        dispatch(changeTaskEntityStatusAC(todolistId, taskId, 'loading'))
         todolistsAPI.updateTask(todolistId, taskId, apiModel)
             .then(res => {
                 const action = updateTaskAC(taskId, domainModel, todolistId)
                 dispatch(action)
                 dispatch(setAppStatusAC('succeeded'))
+                dispatch(changeTaskEntityStatusAC(todolistId, taskId, 'succeeded'))
             }).catch((e: AxiosError) => {
             const error = e.response
                 ? (e.response.data as {error: string}).error
@@ -163,6 +181,9 @@ export type UpdateDomainTaskModelType = {
 export type TasksStateType = {
     [key: string]: Array<TaskType>
 }
+
+
+
 type ActionsType =
     | ReturnType<typeof removeTaskAC>
     | ReturnType<typeof addTaskAC>
@@ -171,6 +192,7 @@ type ActionsType =
     | RemoveTodolistActionType
     | SetTodolistsActionType
     | ReturnType<typeof setTasksAC>
+    | ReturnType<typeof changeTaskEntityStatusAC>
     | setAppStatusACType
     | setErrorType
     | changeTodolistEntityStatusACType
